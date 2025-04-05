@@ -5,19 +5,25 @@ const User = require('../models/User');
 // Register a new user
 const registerUser = async (req, res) => {
   try {
+    console.log("REGISTER BODY:", req.body);
+
     const { username, email, password, name } = req.body;
 
-    // Check if user exists
+    if (!username || !email || !password || !name) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    // Check manually first
     const userExists = await User.findOne({ $or: [{ email }, { username }] });
     if (userExists) {
-      return res.status(400).json({ message: 'User already exists' });
+      const conflictField = userExists.email === email ? 'email' : 'username';
+      return res.status(409).json({ message: `User with this ${conflictField} already exists` });
     }
 
     // Hash password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
+    // Try to create user (catch validation/duplicate key errors below)
     const user = await User.create({
       username,
       email,
@@ -25,32 +31,42 @@ const registerUser = async (req, res) => {
       name,
     });
 
-    if (user) {
-      res.status(201).json({
-        _id: user._id,
-        username: user.username,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        token: generateToken(user._id),
-      });
-    } else {
-      res.status(400).json({ message: 'Invalid user data' });
+    if (!user) {
+      return res.status(500).json({ message: 'User creation failed' });
     }
+
+    // Success
+    return res.status(201).json({
+      _id: user._id,
+      username: user.username,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      token: generateToken(user._id),
+    });
+
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Server error' });
+    console.error("REGISTER ERROR:", error);
+
+    // Handle Mongo duplicate key error explicitly
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyValue)[0];
+      return res.status(409).json({ message: `Duplicate ${field}: already exists` });
+    }
+
+    return res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // Authenticate user & get token
 const loginUser = async (req, res) => {
   try {
+    console.log("Login request body:", req.body); // debug
     const { email, password } = req.body;
 
     // Check for user email
     const user = await User.findOne({ email });
-
+    console.log("found user: ", user);
     if (user && (await bcrypt.compare(password, user.password))) {
       res.json({
         _id: user._id,
@@ -61,9 +77,11 @@ const loginUser = async (req, res) => {
         token: generateToken(user._id),
       });
     } else {
+      console.log("Login failed: incorrect password");
       res.status(401).json({ message: 'Invalid email or password' });
     }
   } catch (error) {
+    console.log("Backend authcontroller.js error");
     console.error(error);
     res.status(500).json({ message: 'Server error' });
   }
