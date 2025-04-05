@@ -14,10 +14,28 @@ connectDB();
 // Initialize Express
 const app = express();
 
+// Dynamic CORS configuration
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://bestseller-book-club-client.vercel.app',
+];
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like Postman or curl)
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS policy: Origin ${origin} not allowed`));
+    }
+  },
+  credentials: true,
+};
+
 // Middleware
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use(cors());
 app.use(helmet());
 app.use(morgan('dev'));
 
