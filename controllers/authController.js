@@ -1,61 +1,64 @@
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
+const admin = require('../config/firebaseAdmin');
 const User = require('../models/User');
+const jwt = require('jsonwebtoken');
 
-// Register a new user
 const registerUser = async (req, res) => {
   try {
-    console.log("REGISTER BODY:", req.body);
+    const idToken = req.headers.authorization?.split(' ')[1];
+    const { name, username, email } = req.body;
 
-    const { username, email, password, name } = req.body;
-
-    if (!username || !email || !password || !name) {
-      return res.status(400).json({ message: 'Missing required fields' });
+    if (!idToken) {
+      return res.status(401).json({ message: 'No Firebase ID token provided' });
     }
 
-    // Check manually first
-    const userExists = await User.findOne({ $or: [{ email }, { username }] });
-    if (userExists) {
-      const conflictField = userExists.email === email ? 'email' : 'username';
-      return res.status(409).json({ message: `User with this ${conflictField} already exists` });
-    }
+    // 🔒 Verify Firebase ID token
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const firebaseUid = decodedToken.uid;
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Try to create user (catch validation/duplicate key errors below)
-    const user = await User.create({
-      username,
-      email,
-      password: hashedPassword,
-      name,
-    });
+    // 🔍 Check if user already exists in Mongo
+    let user = await User.findOne({ firebaseUid });
 
     if (!user) {
-      return res.status(500).json({ message: 'User creation failed' });
+      try {
+        // ✅ Attempt to create new user
+        user = await User.create({
+          name,
+          username,
+          email,
+          firebaseUid,
+        });
+      } catch (err) {
+        // 🧹 If Mongo fails due to duplicate username — delete Firebase user
+        if (err.code === 11000 && err.keyPattern?.username) {
+          try {
+            await admin.auth().deleteUser(firebaseUid);
+            console.warn(`Deleted Firebase user ${firebaseUid} due to duplicate username.`);
+          } catch (deleteErr) {
+            console.error('Failed to delete Firebase user:', deleteErr.message);
+          }
+
+          return res.status(409).json({ message: 'Username is already taken.' });
+        }
+
+        console.error(err);
+        return res.status(500).json({ message: 'Failed to create user profile.' });
+      }
     }
 
-    // Success
-    return res.status(201).json({
-      _id: user._id,
-      username: user.username,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      token: generateToken(user._id),
+    // 🎟️ Issue backend JWT
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+      expiresIn: '7d',
     });
 
-  } catch (error) {
-    console.error("REGISTER ERROR:", error);
-
-    // Handle Mongo duplicate key error explicitly
-    if (error.code === 11000) {
-      const field = Object.keys(error.keyValue)[0];
-      return res.status(409).json({ message: `Duplicate ${field}: already exists` });
-    }
-
-    return res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(201).json({ ...user.toObject(), token });
+  } catch (err) {
+    console.error('Register failed:', err);
+    res.status(500).json({ message: 'Registration failed' });
   }
+};
+
+module.exports = {
+  registerUser,
 };
 
 // Authenticate user & get token

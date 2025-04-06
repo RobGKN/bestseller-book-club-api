@@ -11,10 +11,6 @@ const UserSchema = new mongoose.Schema({
     required: true,
     unique: true,
   },
-  password: {
-    type: String,
-    required: true,
-  },
   name: {
     type: String,
     required: true,
@@ -31,6 +27,11 @@ const UserSchema = new mongoose.Schema({
   updatedAt: {
     type: Date,
     default: Date.now,
+  },
+  firebaseUid: {
+    type: String,
+    required: true,
+    unique: true
   },
 });
 
